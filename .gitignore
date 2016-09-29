@@ -70,3 +70,10 @@ target/
 
 # dotenv
 .env
+
+# pycharm
+.idea
+
+# keep notebook changes local_settings
+*.ipynb
+*.ipynb
