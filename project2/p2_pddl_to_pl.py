@@ -8,10 +8,15 @@ import itertools
 class SuccessorAxiom():
     def __init__(self, fluent_string, act_cause_list, act_cause_not_list):
         # where the cause lists are disjunction lists of conjunction lists
+        self.fluent_string = fluent_string
+        self.act_cause_list = act_cause_list
+        self.act_cause_not_list = act_cause_not_list
         self.transition = {fluent_string: {'act_causes': act_cause_list, 'act_causes_not': act_cause_not_list}}
 
 class PreconditionAxiom():
     def __init__(self, action_string, precondition_list):
+        self.action_string = action_string
+        self.precondition_list = precondition_list
         self.precondition = {action_string: precondition_list}
 
 def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satisfiable):
@@ -39,10 +44,10 @@ def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satis
             fluent_clauses.append((fluent_sym[f, t]))
         return associate('&', fluent_clauses)
 
-    def translate_to_SAT(init, transition, goal, time):
+    def translate_to_SAT(init, transition, precondition, goal, time):
 
         clauses = []
-        fluents = [fluent for fluent in transition]
+        fluents = [s_axiom.fluent_string for s_axiom in transition]
 
         # Symbol claiming fluent f at time t
         fluent_counter = itertools.count()
@@ -50,18 +55,18 @@ def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satis
             for t in range(time + 1):
                 fluent_sym[f, t] = Expr("Fluent_{}".format(next(fluent_counter)))
 
-        # collect all the unique actions from the transition axioms
-        action_set = set()
-        for f in fluents:
-            for key in f:
-                for action in f[key]:
-                    action_set.add(action)
+        print("fluent_sym: {}".format(fluent_sym))
+
+        # collect all the unique actions from the precondition axioms
+        actions = [p_axiom.action_string for p_axiom in precondition]
 
         # Symbol claiming action at time t
         action_counter = itertools.count()
-        for action in action_set:
-            for time in range(time + 1):
-                action_sym[action, t] = Expr("Action_{}".format(next(action_counter)))
+        for a in actions:
+            for t in range(time + 1):
+                action_sym[a, t] = Expr("Action_{}".format(next(action_counter)))
+
+        print("action_sym: {}".format(action_sym))
 
         # Add initial state axiom
         for clause in init:
@@ -72,24 +77,22 @@ def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satis
             clauses.append(fluent_sym[clause, time])
 
         # add successor state axioms defined 7.7.1 and 10.4.1 (sentence for each fluent)
-        for f in transition:
-            action_causes = transition[f]
+        for a in transition:
             for t in range(time):
                 clauses.append(expr("{} <==> ({}) | ({} & ~({})".format(
-                    fluent_sym[f, t + 1],
-                    expand_or_actions(action_causes['act_causes'], t),
-                    fluent_sym[f, t],
-                    expand_or_actions(action_causes['act_causes_not'], t)
+                    fluent_sym[a.fluent_string, t + 1],
+                    expand_or_actions(a.act_cause_list, t),
+                    fluent_sym[a.fluent_string, t],
+                    expand_or_actions(a.act_cause_not_list, t)
                 )))
 
-        # TODO add precondition axioms defined 7.7.4 and 10.4.1
+        # add precondition axioms defined 7.7.4 and 10.4.1
         # A_t ==> PRE(A)_t
         for a in precondition:
-            fluents_pre = precondition[a]
-            for t in range(time):
+            for t in range(time+1):
                 clauses.append(expr("{} ==> {}".format(
-                    action_sym[a, t],
-                    expand_and_fluents(fluents_pre,t),
+                    action_sym[a.action_string, t],
+                    expand_and_fluents(a.precondition_list,t),
                 )))
 
 
@@ -106,7 +109,7 @@ def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satis
 
         # add action exclusion axioms defined 7.7.4
         # ~A(i)_t | ~A(j)_t
-        for t in range(time):
+        for t in range(time+1):
             # list of possible actions at time t
             action_t = [a for a in action_sym if a[1] == t]
 
@@ -125,10 +128,10 @@ def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satis
         return associate('&', clauses)
 
     def extract_solution(model):
-        true_transitions = [t for t in action_sym if model[action_sym[t]]]
+        true_transitions = [t for t in fluent_sym if model[fluent_sym[t]]]
         # Sort transitions based on time, which is the 3rd element of the tuple
-        true_transitions.sort(key=lambda x: x[2])
-        return [action for s, action, time in true_transitions]
+        true_transitions.sort(key=lambda x: x[1])
+        return [action for action, time in true_transitions]
 
     # Body of SAT_plan algorithm
     for t in range(t_max):
@@ -136,8 +139,10 @@ def SAT_plan2(init, transition, precondition, goal, t_max, SAT_solver=dpll_satis
         fluent_sym = {}
         action_sym = {}
 
-        cnf = translate_to_SAT(init, transition, goal, t)
+        cnf = translate_to_SAT(init, transition, precondition, goal, t)
+        print("CNF: {}".format(cnf))
         model = SAT_solver(cnf)
+        print("Model: {}".format(model))
         if model is not False:
             return extract_solution(model)
     return None
@@ -320,11 +325,23 @@ class AirCargoPlanningProblem(PlanningProblem):
             fluents = fluents.difference(self.atemporal_literals())
         return fluents
 
-def test_SAT_plan():
+def test_SAT_plan2():
     #FIXME should be lists of lists
-    transition = [
-        SuccessorAxiom('At(A)',['Left', 'At(B)'],['Right']),
-        SuccessorAxiom('At(B)',['Left', 'Right'])]
+    transition = {
+        SuccessorAxiom('At(A)',['Left(B,A)', 'Left(A,A)'],['Right(A,B)']),
+        SuccessorAxiom('At(B)',['Left(C,B)', 'Right(A,B)'],['Left(B,A)', 'Right(B,C)']),
+        SuccessorAxiom('At(C)', ['Right(B,C)', 'Right(C,C)'], ['Left(C,B)']),
+    }
+    precondition = [
+        PreconditionAxiom('Left(A,A)',['At(A)']),
+        PreconditionAxiom('Left(B,A)',['At(B)']),
+        PreconditionAxiom('Left(C,B)',['At(C)']),
+        PreconditionAxiom('Right(A,B)',['At(A)']),
+        PreconditionAxiom('Right(B,C)',['At(B)']),
+        PreconditionAxiom('Right(C,C)',['At(C)']),
+    ]
+    print(SAT_plan2(['At(A)'], transition, precondition, ['At(C)'], 3))
+
 
     #     {'A': {'Left': 'A', 'Right': 'B'},
     #               'B': {'Left': 'A', 'Right': 'C'},
@@ -333,13 +350,13 @@ def test_SAT_plan():
     # assert SAT_plan('A', transition, 'B', 3) == ['Right']
     # assert SAT_plan('C', transition, 'A', 3) == ['Left', 'Left']
 
-    transition = {(0, 0): {'Right': (0, 1), 'Down': (1, 0)},
-                  (0, 1): {'Left': (1, 0), 'Down': (1, 1)},
-                  (1, 0): {'Right': (1, 0), 'Up': (1, 0), 'Left': (1, 0), 'Down': (1, 0)},
-                  (1, 1): {'Left': (1, 0), 'Up': (0, 1)}}
-    assert SAT_plan2((0, 0), transition, (1, 1), 4) == ['Right', 'Down']
+    # transition = {(0, 0): {'Right': (0, 1), 'Down': (1, 0)},
+    #               (0, 1): {'Left': (1, 0), 'Down': (1, 1)},
+    #               (1, 0): {'Right': (1, 0), 'Up': (1, 0), 'Left': (1, 0), 'Down': (1, 0)},
+    #               (1, 1): {'Left': (1, 0), 'Up': (0, 1)}}
+    # assert SAT_plan2((0, 0), transition, (1, 1), 4) == ['Right', 'Down']
 
 if __name__ == '__main__':
     # test this satplan
-    pass
+    test_SAT_plan2()
 
